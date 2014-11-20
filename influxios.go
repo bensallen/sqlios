@@ -44,16 +44,6 @@ func (e ErrColumnValueLengthMismatch) Error() string {
 //Cmd line flags
 var input = flag.String("input", "", "input file")
 
-func startup() {
-	flag.Parse()
-
-	if *input == "" {
-		log.Fatal("--input was not specified")
-	}
-	
-	return
-}
-
 // readLines reads a whole file into memory
 // and returns a slice of its lines.
 // TODO Figure out how to stream a file
@@ -212,7 +202,11 @@ func parseLine(lineNum int, line string) (columns []string, values []interface{}
 
 func main() {
 
-	startup()
+	flag.Parse()
+
+	if *input == "" {
+		log.Fatal("--input was not specified")
+	}
 	
 	lines, err := readLines(*input)
 
