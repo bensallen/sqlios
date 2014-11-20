@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/influxdb/influxdb-go"
 	"io"
 	"log"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"github.com/influxdb/influxdb/client"
 )
 
 //Custom Errors
@@ -43,6 +43,7 @@ func (e ErrColumnValueLengthMismatch) Error() string {
 
 //Cmd line flags
 var input = flag.String("input", "", "input file")
+var noop  = flag.Bool("noop", false, "Don't actually push any data to InfluxDB, but just print out the JSON output")
 
 // readLines reads a whole file into memory
 // and returns a slice of its lines.
@@ -214,26 +215,33 @@ func main() {
 		log.Fatalf("readLines: %s", err)
 	}
 
+	c, err := client.NewClient(&client.ClientConfig{})
+	if err != nil {
+		log.Fatalf("client.NewClient: %s", err)
+	}
+	
 	for i, line := range lines {
 		columns, values, name, err := parseLine(i, line)
 		if err != nil {
 			log.Printf("Warning, parseLine: %s", err)
 		}
 
-		series := &influxdb.Series{
+		series := &client.Series{
 			Name:    strings.Join(name, "."),
 			Columns: columns,
 			Points: [][]interface{}{
 				values,
 			},
 		}
-		b, _ := json.MarshalIndent(series, "", "  ")
-
-		os.Stdout.Write(b)
-
-		/*if err := client.WriteSeriesWithTimePrecision([]*influxdb.Series{series}, influxdb.Second); err != nil {
-			log.Printf("influxdb.WriteSeries: %s", err)
-		}*/
+		
+		if *noop == true {
+			b, _ := json.MarshalIndent(series, "", "  ")
+			os.Stdout.Write(b)
+		} else {
+			if err := c.WriteSeriesWithTimePrecision([]*client.Series{series}, client.Second); err != nil {
+				log.Printf("client.WriteSeriesWithTimePrecision: %s", err)
+			}
+		}
 	}
 
 }
