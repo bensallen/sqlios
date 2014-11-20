@@ -22,9 +22,9 @@ func (e ErrNonNumeric) Error() string {
 	return fmt.Sprintf("could not find a numeric value: %s", e)
 }
 
-type ErrNotPerfDataKV string
+type ErrPerfDataNotKeyValue string
 
-func (e ErrNotPerfDataKV) Error() string {
+func (e ErrPerfDataNotKeyValue) Error() string {
 	return fmt.Sprintf("perfdata found without a key = value format: %s", e)
 }
 
@@ -113,18 +113,19 @@ func parsePerfData(s string) (columns []string, values []interface{}, err error)
 					if attr == "" {
 						continue
 					}
-					columns = append(columns, strings.ToLower(prefix+string(perfdataKv[0])+perfmap[z]))
 					value, err := parseDataValue(attr)
 					if err != nil {
-						log.Fatalf("parseDataValue: %s", err)
+						log.Printf("Warning, parseDataValue: %s", err)
+						continue
 					}
+					columns = append(columns, strings.ToLower(prefix+string(perfdataKv[0])+perfmap[z]))
 					values = append(values, value)
 				}
 			} else {
-				err = ErrNotPerfDataKV(s)
+				err = ErrPerfDataNotKeyValue(perfdata)
 			}
 		} else {
-			err = ErrNotPerfData(s)
+			err = ErrNotPerfData(perfdata)
 		}
 	}
 	return columns, values, err
@@ -160,7 +161,7 @@ func parseLine(lineNum int, line string) (columns []string, values []interface{}
 	// Sanity check, line should start with...
 	if lineParts[0] == "DATATYPE::HOSTPERFDATA" || lineParts[0] == "DATATYPE::SERVICEPERFDATA" {
 		
-		// Name will be HOSTNAME.SERVICECHECKCOMMAND
+		// Series name will be HOSTNAME.SERVICECHECKCOMMAND
 		name = make([]string, 2)
 		
 		for _, part := range lineParts {
@@ -175,7 +176,10 @@ func parseLine(lineNum int, line string) (columns []string, values []interface{}
 
 			// Parse Perfdata
 			} else if kv[0] == "SERVICEPERFDATA" || kv[0] == "HOSTPERFDATA" {
-				perfColumns, perfValues, _ := parsePerfData(kv[1])
+				perfColumns, perfValues, err := parsePerfData(kv[1])
+				if err != nil {
+					log.Panicf("Warning, parsePerfData: %s", err)
+				}
 				//fmt.Println(perfColumns, perfValues)
 				columns = append(columns, perfColumns...)
 				values = append(values, perfValues...)
