@@ -42,8 +42,12 @@ func (e ErrColumnValueLengthMismatch) Error() string {
 }
 
 //Cmd line flags
-var input = flag.String("input", "", "input file")
-var noop  = flag.Bool("noop", false, "Don't actually push any data to InfluxDB, but just print out the JSON output")
+var input 		= flag.String("input", "", "input file")
+var noop  		= flag.Bool("noop", false, "Don't actually push any data to InfluxDB, just print the JSON output")
+var host		= flag.String("host", "", "InfluxDB host to connect to")
+var username	= flag.String("username", "", "InfluxDB username to authenticate as")
+var password	= flag.String("password", "", "Password to authenticate with")
+var database	= flag.String("database", "", "InfluxDB database to connect to")
 
 // readLines reads a whole file into memory
 // and returns a slice of its lines.
@@ -215,7 +219,13 @@ func main() {
 		log.Fatalf("readLines: %s", err)
 	}
 
-	c, err := client.NewClient(&client.ClientConfig{})
+	c, err := client.NewClient(&client.ClientConfig{
+		Host:       *host,
+		Username:   *username,
+		Password:   *password,
+		Database:   *database,
+	})
+	
 	if err != nil {
 		log.Fatalf("client.NewClient: %s", err)
 	}
