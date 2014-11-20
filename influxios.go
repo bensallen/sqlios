@@ -187,7 +187,7 @@ func parseLine(s string, lineNum int) (columns []string, values []interface{}, n
 				perfColumns, perfValues, err := parsePerfData(kv[1], lineNum)
 				//TODO Print whole line instead of the specific perfdata, highlight specific perfdata
 				if err != nil {
-					log.Fatal(err)
+					log.Printf("Warning, parsePerfData: %s", err)
 				}
 				//fmt.Println(perfColumns, perfValues)
 				columns = append(columns, perfColumns...)
