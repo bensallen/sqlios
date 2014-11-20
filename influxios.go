@@ -6,50 +6,56 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/influxdb/influxdb/client"
 	"io"
 	"log"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
-	"github.com/influxdb/influxdb/client"
 )
 
 //Custom Errors
-type ErrNonNumeric string
+type ErrNonNumeric struct{ Msg string }
 
-func (e ErrNonNumeric) Error() string {
-	return fmt.Sprintf("could not find a numeric value: %s", e)
+func (e *ErrNonNumeric) Error() string {
+	return fmt.Sprintf("could not find a numeric value: %s", e.Msg)
 }
 
 type ErrPerfDataNotKeyValue struct {
-	Msg string
+	Msg     string
+	LineNum int
 }
 
 func (e *ErrPerfDataNotKeyValue) Error() string {
-	return fmt.Sprintf("perfdata found without a key = value format: %s", e.Msg)
+	return fmt.Sprintf("perfdata found without a key = value format at Line %d: %s", e.LineNum, e.Msg)
 }
 
-type ErrNotPerfData string
-
-func (e ErrNotPerfData) Error() string {
-	return fmt.Sprintf("perfdata is in unexpected format, not a single value or 5 \";\" separated string: %s", e)
+type ErrNotPerfData struct {
+	Msg     string
+	LineNum int
 }
 
-type ErrColumnValueLengthMismatch string
+func (e *ErrNotPerfData) Error() string {
+	return fmt.Sprintf("perfdata is in unexpected format, not a single value or 5 \";\" separated string at Line %d: %s", e.LineNum, e.Msg)
+}
 
-// TODO Figure out how to include line number in error message.
-func (e ErrColumnValueLengthMismatch) Error() string {
-	return fmt.Sprintf("resulting columns and value element lengths are not equal: %s", e)
+type ErrColumnValueLengthMismatch struct {
+	Msg     string
+	LineNum int
+}
+
+func (e *ErrColumnValueLengthMismatch) Error() string {
+	return fmt.Sprintf("resulting columns and value element lengths are not equal at Line %d: %s", e.LineNum, e.Msg)
 }
 
 //Cmd line flags
-var input 		= flag.String("input", "", "input file")
-var noop  		= flag.Bool("noop", false, "Don't actually push any data to InfluxDB, just print the JSON output")
-var host		= flag.String("host", "", "InfluxDB host to connect to")
-var username	= flag.String("username", "", "InfluxDB username to authenticate as")
-var password	= flag.String("password", "", "Password to authenticate with")
-var database	= flag.String("database", "", "InfluxDB database to connect to")
+var input = flag.String("input", "", "input file")
+var noop = flag.Bool("noop", false, "Don't actually push any data to InfluxDB, just print the JSON output")
+var host = flag.String("host", "", "InfluxDB host to connect to")
+var username = flag.String("username", "", "InfluxDB username to authenticate as")
+var password = flag.String("password", "", "Password to authenticate with")
+var database = flag.String("database", "", "InfluxDB database to connect to")
 
 // readLines reads a whole file into memory
 // and returns a slice of its lines.
@@ -84,7 +90,7 @@ func readLines(path string) (lines []string, err error) {
 }
 
 // Parse host and service performance data. Return it in column name and values slices.
-func parsePerfData(s string) (columns []string, values []interface{}, err error) {
+func parsePerfData(s string, lineNum int) (columns []string, values []interface{}, err error) {
 
 	// Prefix all perfdata column names with:
 	var prefix string = "perfdata."
@@ -124,10 +130,10 @@ func parsePerfData(s string) (columns []string, values []interface{}, err error)
 					values = append(values, value)
 				}
 			} else {
-				err = &ErrPerfDataNotKeyValue{perfdata}
+				err = &ErrPerfDataNotKeyValue{s, lineNum}
 			}
 		} else {
-			err = ErrNotPerfData(perfdata)
+			err = &ErrNotPerfData{s, lineNum}
 		}
 	}
 	return columns, values, err
@@ -152,20 +158,20 @@ func parseDataValue(s string) (percent float64, err error) {
 		if num != "" {
 			return strconv.ParseFloat(num, 64)
 		} else {
-			return 0, ErrNonNumeric(s)
+			return 0, &ErrNonNumeric{s}
 		}
 	}
 }
 
-func parseLine(lineNum int, line string) (columns []string, values []interface{}, name []string, err error) {
-	lineParts := strings.Split(line, "\t")
+func parseLine(s string, lineNum int) (columns []string, values []interface{}, name []string, err error) {
+	lineParts := strings.Split(s, "\t")
 
 	// Sanity check, line should start with...
 	if lineParts[0] == "DATATYPE::HOSTPERFDATA" || lineParts[0] == "DATATYPE::SERVICEPERFDATA" {
-		
+
 		// Series name will be HOSTNAME.SERVICECHECKCOMMAND
 		name = make([]string, 2)
-		
+
 		for _, part := range lineParts {
 			kv := strings.Split(part, "::")
 			if kv[0] == "TIMET" {
@@ -176,11 +182,12 @@ func parseLine(lineNum int, line string) (columns []string, values []interface{}
 				}
 				values = append(values, time)
 
-			// Parse Perfdata
+				// Parse Perfdata
 			} else if kv[0] == "SERVICEPERFDATA" || kv[0] == "HOSTPERFDATA" {
-				perfColumns, perfValues, err := parsePerfData(kv[1])
+				perfColumns, perfValues, err := parsePerfData(kv[1], lineNum)
+				//TODO Print whole line instead of the specific perfdata, highlight specific perfdata
 				if err != nil {
-					log.Panicf("Warning, parsePerfData: %s", err)
+					log.Fatal(err)
 				}
 				//fmt.Println(perfColumns, perfValues)
 				columns = append(columns, perfColumns...)
@@ -204,7 +211,7 @@ func parseLine(lineNum int, line string) (columns []string, values []interface{}
 			//fmt.Println(i, columns, values)
 			return columns, values, name, err
 		} else {
-			return columns, values, name, ErrColumnValueLengthMismatch(line)
+			return columns, values, name, &ErrColumnValueLengthMismatch{s, lineNum}
 		}
 
 	}
@@ -218,7 +225,7 @@ func main() {
 	if *input == "" {
 		log.Fatal("--input was not specified")
 	}
-	
+
 	lines, err := readLines(*input)
 
 	if err != nil {
@@ -226,18 +233,18 @@ func main() {
 	}
 
 	c, err := client.NewClient(&client.ClientConfig{
-		Host:       *host,
-		Username:   *username,
-		Password:   *password,
-		Database:   *database,
+		Host:     *host,
+		Username: *username,
+		Password: *password,
+		Database: *database,
 	})
-	
+
 	if err != nil {
 		log.Fatalf("client.NewClient: %s", err)
 	}
-	
+
 	for i, line := range lines {
-		columns, values, name, err := parseLine(i, line)
+		columns, values, name, err := parseLine(line, i)
 		if err != nil {
 			log.Printf("Warning, parseLine: %s", err)
 		}
@@ -249,9 +256,10 @@ func main() {
 				values,
 			},
 		}
-		
+
 		if *noop == true {
 			b, _ := json.MarshalIndent(series, "", "  ")
+			b = append(b, "\n"...)
 			os.Stdout.Write(b)
 		} else {
 			if err := c.WriteSeriesWithTimePrecision([]*client.Series{series}, client.Second); err != nil {
