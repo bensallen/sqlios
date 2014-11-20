@@ -22,10 +22,12 @@ func (e ErrNonNumeric) Error() string {
 	return fmt.Sprintf("could not find a numeric value: %s", e)
 }
 
-type ErrPerfDataNotKeyValue string
+type ErrPerfDataNotKeyValue struct {
+	Msg string
+}
 
-func (e ErrPerfDataNotKeyValue) Error() string {
-	return fmt.Sprintf("perfdata found without a key = value format: %s", e)
+func (e *ErrPerfDataNotKeyValue) Error() string {
+	return fmt.Sprintf("perfdata found without a key = value format: %s", e.Msg)
 }
 
 type ErrNotPerfData string
@@ -122,7 +124,7 @@ func parsePerfData(s string) (columns []string, values []interface{}, err error)
 					values = append(values, value)
 				}
 			} else {
-				err = ErrPerfDataNotKeyValue(perfdata)
+				err = &ErrPerfDataNotKeyValue{perfdata}
 			}
 		} else {
 			err = ErrNotPerfData(perfdata)
