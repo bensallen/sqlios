@@ -7,8 +7,10 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/influxdb/influxdb/client"
 	"github.com/jprichardson/readline-go"
@@ -16,6 +18,7 @@ import (
 
 //Cmd line flags
 var input = flag.String("input", "", "input file")
+var cpus = flag.Int("cpus", 0, "Max number of CPUs to use")
 var noop = flag.Bool("noop", false, "Don't actually push any data to InfluxDB, just print the JSON output")
 var host = flag.String("host", "", "InfluxDB host to connect to")
 var username = flag.String("username", "", "InfluxDB username to authenticate as")
@@ -44,6 +47,20 @@ type ErrNotPerfData struct {
 
 func (e *ErrNotPerfData) Error() string {
 	return fmt.Sprintf("perfdata is in unexpected format, not a single value or 5 \";\" separated string at Line %d: %s", e.LineNum, e.Msg)
+}
+
+//Structs
+type Block struct {
+	Section string
+	Lines   []string
+}
+
+func prettyName(name []string) string {
+	if name[1] == "" {
+		return name[0]
+	} else {
+		return strings.Join(name, ".")
+	}
 }
 
 // If value has a % convert to a decimal, otherwise strip any non-numerical suffixes
@@ -127,88 +144,107 @@ func parsePerfData(s string) (columns []string, points []interface{}, err error)
 	return columns, points, err
 }
 
-func parseLine(line *string, inBlock *string, name []string, columns []string, points []interface{}) ([]string, []string, []interface{}) {
-
+func parseLine(line *string, inBlock *bool, section *string, block []string) []string {
 	//Start of a block
 	if strings.HasSuffix(*line, " {") {
-		*inBlock = strings.TrimSuffix(*line, " {")
-
+		*inBlock = true
+		*section = strings.TrimSuffix(*line, " {")
 		//fmt.Printf("Start of block %s \n", *inBlock)
 		//End of a block
 	} else if *line == "\t}" {
-		*inBlock = ""
-	} else if *inBlock != "" {
-		//log.Printf("Index at: %d", len(columns)-1)
-		kv := strings.Split(*line, "=")
-
-		//Replace the last_check column with a column named time, so InfluxDB will use it as its index
-		if kv[0] == "\tlast_check" {
-			columns = append(columns, "time")
-			time, err := strconv.Atoi(kv[1])
-			if err != nil {
-				log.Fatalf("strconv.Atoi: %s", err)
-			}
-			points = append(points, time)
-			return name, columns, points
-		} else if kv[0] == "\tperformance_data" && kv[1] != "" {
-			perfColumns, perfValues, err := parsePerfData(strings.TrimPrefix(*line, "\tperformance_data="))
-			//TODO Print whole line instead of the specific perfdata, highlight specific perfdata
-			if err != nil {
-				log.Printf("Warning, parsePerfData: %s", err)
-			}
-			//fmt.Println(perfColumns, perfValues)
-			columns = append(columns, perfColumns...)
-			points = append(points, perfValues...)
-			return name, columns, points
-		}
-
-		switch {
-		case *inBlock == "hoststatus":
-			//fmt.Println(strings.TrimLeft(kv[0],"\t"))
-			if kv[0] == "\thost_name" {
-				name[0] = kv[1]
-			}
-		case *inBlock == "servicestatus":
-			if kv[0] == "\thost_name" {
-				name[0] = kv[1]
-			} else if kv[0] == "\tcheck_command" {
-				name[1] = kv[1]
-			}
-			//fmt.Println(strings.TrimLeft(kv[0],"\t"))
-
-		case *inBlock == "info":
-			name[0] = "info"
-			//TODO: Figure out which field to use for time
-		case *inBlock == "programstatus":
-			name[0] = "programstatus"
-			//TODO: Figure out which field to use for time
-
-		case *inBlock == "contactstatus":
-			if kv[0] == "\tcontact_name" {
-				name[0] = kv[1]
-			}
-		case *inBlock == "hostcomment" || *inBlock == "servicecomment" || *inBlock == "hostdowntime":
-			if kv[0] == "\thost_name" {
-				name[0] = kv[1]
-				name[1] = *inBlock
-			}
-		}
-
-		//fmt.Println(strings.TrimLeft(kv[0],"\t"))
-		if kv[1] != "" {
-			value, _ := parseDataValue(kv[1])
-			columns = append(columns, strings.TrimLeft(kv[0], "\t"))
-			points = append(points, value)
-		}
+		*inBlock = false
+	} else if *inBlock == true {
+		block = append(block, *line)
 	}
-	return name, columns, points
+	return block
 }
 
-func prettyName(name []string) string {
-	if name[1] == "" {
-		return name[0]
-	} else {
-		return strings.Join(name, ".")
+func parseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error) {
+
+	for block := range blockc {
+
+		var name []string = make([]string, 2)
+		var columns []string = make([]string, 0, 60)
+		var points []interface{} = make([]interface{}, 0, 60)
+
+		for _, line := range block.Lines {
+			//fmt.Println(block.Section)
+			kv := strings.Split(line, "=")
+
+			//Replace the last_check column with a column named time, so InfluxDB will use it as its index
+			if kv[0] == "\tlast_check" {
+				columns = append(columns, "time")
+				time, err := strconv.Atoi(kv[1])
+				if err != nil {
+					errc <- err
+				}
+				points = append(points, time)
+				continue
+			} else if kv[0] == "\tperformance_data" && kv[1] != "" {
+				perfColumns, perfValues, err := parsePerfData(strings.TrimPrefix(line, "\tperformance_data="))
+				//TODO Print whole line instead of the specific perfdata, highlight specific perfdata
+				if err != nil {
+					errc <- err
+				}
+				//fmt.Println(perfColumns, perfValues)
+				columns = append(columns, perfColumns...)
+				points = append(points, perfValues...)
+				continue
+			}
+
+			switch {
+			case block.Section == "hoststatus":
+				//fmt.Println(strings.TrimLeft(kv[0],"\t"))
+				if kv[0] == "\thost_name" {
+					name[0] = kv[1]
+				}
+			case block.Section == "servicestatus":
+				if kv[0] == "\thost_name" {
+					name[0] = kv[1]
+				} else if kv[0] == "\tcheck_command" {
+					name[1] = kv[1]
+				}
+				//fmt.Println(strings.TrimLeft(kv[0],"\t"))
+
+			case block.Section == "info":
+				name[0] = "info"
+				//TODO: Figure out which field to use for time
+			case block.Section == "programstatus":
+				name[0] = "programstatus"
+				//TODO: Figure out which field to use for time
+
+			case block.Section == "contactstatus":
+				if kv[0] == "\tcontact_name" {
+					name[0] = kv[1]
+				}
+			case block.Section == "hostcomment" || block.Section == "servicecomment" || block.Section == "hostdowntime":
+				if kv[0] == "\thost_name" {
+					name[0] = kv[1]
+					name[1] = block.Section
+				}
+			}
+
+			if kv[1] != "" {
+				value, _ := parseDataValue(kv[1])
+				columns = append(columns, strings.TrimLeft(kv[0], "\t"))
+				points = append(points, value)
+			}
+		}
+		series := &client.Series{
+			Name:    prettyName(name),
+			Columns: columns,
+			Points: [][]interface{}{
+				points,
+			},
+		}
+
+		if *noop == true {
+			b, _ := json.MarshalIndent(series, "", "  ")
+			b = append(b, "\n"...)
+			os.Stdout.Write(b)
+		} else {
+			seriesc <- series
+		}
 	}
 }
 
@@ -219,15 +255,24 @@ func uploader(c *client.Client, seriesc chan *client.Series, errc chan error) {
 			errc <- err
 		}
 	}
-	close(errc)
 }
 
 func main() {
+	var NCPU = runtime.NumCPU()
+	runtime.GOMAXPROCS(NCPU)
+	var numUploaders = NCPU * 2
+	var numBlockParsers = NCPU * 2
 
 	flag.Parse()
 
 	if *input == "" {
 		log.Fatal("--input was not specified")
+	}
+
+	if *cpus != 0 {
+		runtime.GOMAXPROCS(*cpus)
+		numUploaders = *cpus * 2
+		numBlockParsers = *cpus * 2
 	}
 
 	file, err := os.Open(*input)
@@ -247,10 +292,7 @@ func main() {
 		log.Fatalf("client.NewClient: %s", err)
 	}
 
-	var inBlock string
-	var name []string = make([]string, 2)
-	var columns []string = make([]string, 0, 55)
-	var points []interface{} = make([]interface{}, 0, 55)
+	var blockc chan Block = make(chan Block)
 	var seriesc chan *client.Series = make(chan *client.Series)
 	var errc chan error = make(chan error, 10)
 
@@ -261,8 +303,31 @@ func main() {
 		}
 	}()
 
+	var wgUploaders sync.WaitGroup
+	var wgBlockParsers sync.WaitGroup
+
 	// Startup the uploader handler
-	go uploader(c, seriesc, errc)
+	wgUploaders.Add(numUploaders)
+	for i := 0; i < numUploaders; i++ {
+		go func() {
+			uploader(c, seriesc, errc)
+			wgUploaders.Done()
+		}()
+	}
+
+	// Startup the block parser
+	wgBlockParsers.Add(numBlockParsers)
+	for i := 0; i < numBlockParsers; i++ {
+		go func() {
+			// Startup the uploader handler
+			parseBlock(blockc, seriesc, errc)
+			wgBlockParsers.Done()
+		}()
+	}
+
+	var inBlock bool
+	var section string
+	var block []string = make([]string, 0, 55)
 
 	// Start reading the file
 	readline.ReadLine(file, func(line string) {
@@ -271,38 +336,26 @@ func main() {
 			return
 		}
 
-		name, columns, points = parseLine(&line, &inBlock, name, columns, points)
+		block = parseLine(&line, &inBlock, &section, block)
 
-		if inBlock == "" {
-			if prettyName(name) == "" {
-				log.Fatalf("Empty name, bailing")
-			}
-			series := &client.Series{
-				Name:    prettyName(name),
-				Columns: columns,
-				Points: [][]interface{}{
-					points,
-				},
-			}
+		//Finished with a block
+		if inBlock == false {
+			blockc <- Block{section, block}
 
-			if *noop == true {
-				b, _ := json.MarshalIndent(series, "", "  ")
-				b = append(b, "\n"...)
-				os.Stdout.Write(b)
-			} else {
-				seriesc <- series
-			}
-
-			//Empty the columns and points slices since we're into a new section.
-			//log.Print("Emptying columns and points slices")
-
-			name = make([]string, 2)
-			columns = make([]string, 0, 55)
-			points = make([]interface{}, 0, 55)
+			//Empty the block slice and section since we're headed into a new section.
+			block = make([]string, 0, 55)
+			section = ""
 		}
 	})
 
+	//The following needs to be in this very specfic order of closes and waits.
+	//Close blockc so parseBlock will exit
+	close(blockc)
+	wgBlockParsers.Wait()
+	//Close seriesc so uploader will exit
 	close(seriesc)
+	wgUploaders.Wait()
+	close(errc)
 
 	err = file.Close()
 
