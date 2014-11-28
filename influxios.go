@@ -4,10 +4,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"regexp"
-	//"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -213,6 +212,16 @@ func prettyName(name []string) string {
 	}
 }
 
+func uploader(c *client.Client, seriesc chan *client.Series, errc chan error) {
+
+	for series := range seriesc {
+		if err := c.WriteSeriesWithTimePrecision([]*client.Series{series}, client.Second); err != nil {
+			errc <- err
+		}
+	}
+	close(errc)
+}
+
 func main() {
 
 	flag.Parse()
@@ -242,7 +251,20 @@ func main() {
 	var name []string = make([]string, 2)
 	var columns []string = make([]string, 0, 55)
 	var points []interface{} = make([]interface{}, 0, 55)
+	var seriesc chan *client.Series = make(chan *client.Series)
+	var errc chan error = make(chan error, 10)
 
+	// Startup an err channel handler
+	go func() {
+		for err := range errc {
+			log.Printf("Error, %s", err)
+		}
+	}()
+
+	// Startup the uploader handler
+	go uploader(c, seriesc, errc)
+
+	// Start reading the file
 	readline.ReadLine(file, func(line string) {
 		if string(line[0]) == "#" {
 			log.Printf("Skipped comment: %s", line)
@@ -268,9 +290,7 @@ func main() {
 				b = append(b, "\n"...)
 				os.Stdout.Write(b)
 			} else {
-				if err := c.WriteSeriesWithTimePrecision([]*client.Series{series}, client.Second); err != nil {
-					log.Printf("client.WriteSeriesWithTimePrecision: %s", err)
-				}
+				seriesc <- series
 			}
 
 			//Empty the columns and points slices since we're into a new section.
@@ -281,6 +301,8 @@ func main() {
 			points = make([]interface{}, 0, 55)
 		}
 	})
+
+	close(seriesc)
 
 	err = file.Close()
 
