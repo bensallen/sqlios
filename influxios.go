@@ -306,7 +306,7 @@ func main() {
 	var wgUploaders sync.WaitGroup
 	var wgBlockParsers sync.WaitGroup
 
-	// Startup the uploader handler
+	// Startup the uploader handlers
 	wgUploaders.Add(numUploaders)
 	for i := 0; i < numUploaders; i++ {
 		go func() {
@@ -315,11 +315,10 @@ func main() {
 		}()
 	}
 
-	// Startup the block parser
+	// Startup the block parsers
 	wgBlockParsers.Add(numBlockParsers)
 	for i := 0; i < numBlockParsers; i++ {
 		go func() {
-			// Startup the uploader handler
 			parseBlock(blockc, seriesc, errc)
 			wgBlockParsers.Done()
 		}()
@@ -357,9 +356,7 @@ func main() {
 	wgUploaders.Wait()
 	close(errc)
 
-	err = file.Close()
-
-	if err != nil {
+	if err = file.Close(); err != nil {
 		log.Fatalf("os.Close: %s", err)
 	}
 }
