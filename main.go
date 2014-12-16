@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -14,16 +13,21 @@ import (
 
 	"github.com/influxdb/influxdb/client"
 	"github.com/jprichardson/readline-go"
+	"gopkg.in/alecthomas/kingpin.v1"
 )
 
 //Cmd line flags
-var input = flag.String("input", "", "input file")
-var cpus = flag.Int("cpus", 0, "Max number of CPUs to use")
-var noop = flag.Bool("noop", false, "Don't actually push any data to InfluxDB, just print the JSON output")
-var host = flag.String("host", "", "InfluxDB host to connect to")
-var username = flag.String("username", "", "InfluxDB username to authenticate as")
-var password = flag.String("password", "", "Password to authenticate with")
-var database = flag.String("database", "", "InfluxDB database to connect to")
+var (
+	input    = kingpin.Flag("input", "Input file").Required().Short('i').String()
+	cpus     = kingpin.Flag("cpus", "Max number of CPUs to use").Short('c').Int()
+	noop     = kingpin.Flag("noop", "Don't actually push any data to InfluxDB, just print the JSON output").Short('n').Bool()
+	oneshot  = kingpin.Flag("oneshot", "Run once in the forground and exit").Short('o').Bool()
+	debug    = kingpin.Flag("debug", "Print debug output").Short('d').Bool()
+	host     = kingpin.Flag("host", "InfluxDB host to connect to").Default("localhost:8086").Short('h').String()
+	username = kingpin.Flag("username", "InfluxDB username to authenticate as").Default("root").Short('u').String()
+	password = kingpin.Flag("password", "Password to authenticate with").Default("root").Short('p').String()
+	database = kingpin.Flag("database", "InfluxDB database to connect to").Short('D').String()
+)
 
 type ErrNonNumeric struct{ Msg string }
 
@@ -257,17 +261,43 @@ func uploader(c *client.Client, seriesc chan *client.Series, errc chan error) {
 	}
 }
 
+func reader(blockc chan Block, filec chan *os.File) {
+	for file := range filec {
+		var inBlock bool
+		var section string
+		var block []string = make([]string, 0, 55)
+
+		// Start reading the file
+		readline.ReadLine(file, func(line string) {
+			if string(line[0]) == "#" {
+				if *debug {
+					log.Printf("Skipped comment: %s", line)
+				}
+				return
+			}
+
+			block = parseLine(&line, &inBlock, &section, block)
+
+			//Finished with a block
+			if inBlock == false {
+				blockc <- Block{section, block}
+
+				//Empty the block slice and section since we're headed into a new section.
+				block = make([]string, 0, 55)
+				section = ""
+			}
+		})
+	}
+
+}
+
 func main() {
 	var NCPU = runtime.NumCPU()
 	runtime.GOMAXPROCS(NCPU)
 	var numUploaders = NCPU * 2
 	var numBlockParsers = NCPU * 2
 
-	flag.Parse()
-
-	if *input == "" {
-		log.Fatal("--input was not specified")
-	}
+	kingpin.Parse()
 
 	if *cpus != 0 {
 		runtime.GOMAXPROCS(*cpus)
@@ -292,6 +322,7 @@ func main() {
 		log.Fatalf("client.NewClient: %s", err)
 	}
 
+	var filec chan *os.File = make(chan *os.File)
 	var blockc chan Block = make(chan Block)
 	var seriesc chan *client.Series = make(chan *client.Series)
 	var errc chan error = make(chan error, 10)
@@ -303,8 +334,17 @@ func main() {
 		}
 	}()
 
+	var wgReader sync.WaitGroup
 	var wgUploaders sync.WaitGroup
 	var wgBlockParsers sync.WaitGroup
+
+	wgReader.Add(1)
+	go func() {
+		reader(blockc, filec)
+		wgReader.Done()
+	}()
+
+	filec <- file
 
 	// Startup the uploader handlers
 	wgUploaders.Add(numUploaders)
@@ -324,30 +364,9 @@ func main() {
 		}()
 	}
 
-	var inBlock bool
-	var section string
-	var block []string = make([]string, 0, 55)
-
-	// Start reading the file
-	readline.ReadLine(file, func(line string) {
-		if string(line[0]) == "#" {
-			log.Printf("Skipped comment: %s", line)
-			return
-		}
-
-		block = parseLine(&line, &inBlock, &section, block)
-
-		//Finished with a block
-		if inBlock == false {
-			blockc <- Block{section, block}
-
-			//Empty the block slice and section since we're headed into a new section.
-			block = make([]string, 0, 55)
-			section = ""
-		}
-	})
-
 	//The following needs to be in this very specfic order of closes and waits.
+	close(filec)
+	wgReader.Wait()
 	//Close blockc so parseBlock will exit
 	close(blockc)
 	wgBlockParsers.Wait()
