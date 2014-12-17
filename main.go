@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -13,7 +14,9 @@ import (
 
 	"github.com/influxdb/influxdb/client"
 	"github.com/jprichardson/readline-go"
+	"gitlab.alcf.anl.gov/bsallen/watcher/watch"
 	"gopkg.in/alecthomas/kingpin.v1"
+	"gopkg.in/fsnotify.v1"
 )
 
 //Cmd line flags
@@ -29,6 +32,7 @@ var (
 	database = kingpin.Flag("database", "InfluxDB database to connect to").Short('D').String()
 )
 
+//Custom Errors
 type ErrNonNumeric struct{ Msg string }
 
 func (e *ErrNonNumeric) Error() string {
@@ -59,6 +63,7 @@ type Block struct {
 	Lines   []string
 }
 
+//Joins the name slice with a "." if both elements exist, otherwise return just the first element
 func prettyName(name []string) string {
 	if name[1] == "" {
 		return name[0]
@@ -176,7 +181,7 @@ func parseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error)
 			kv := strings.Split(line, "=")
 
 			//Replace the last_check column with a column named time, so InfluxDB will use it as its index
-			if kv[0] == "\tlast_check" {
+			if kv[0] == "\tlast_check" || kv[0] == "\tcreated" {
 				columns = append(columns, "time")
 				time, err := strconv.Atoi(kv[1])
 				if err != nil {
@@ -242,26 +247,27 @@ func parseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error)
 			},
 		}
 
+		seriesc <- series
+
+	}
+}
+
+func uploader(noop *bool, c *client.Client, seriesc chan *client.Series, errc chan error) {
+
+	for series := range seriesc {
 		if *noop == true {
 			b, _ := json.MarshalIndent(series, "", "  ")
 			b = append(b, "\n"...)
 			os.Stdout.Write(b)
 		} else {
-			seriesc <- series
+			if err := c.WriteSeriesWithTimePrecision([]*client.Series{series}, client.Second); err != nil {
+				errc <- err
+			}
 		}
 	}
 }
 
-func uploader(c *client.Client, seriesc chan *client.Series, errc chan error) {
-
-	for series := range seriesc {
-		if err := c.WriteSeriesWithTimePrecision([]*client.Series{series}, client.Second); err != nil {
-			errc <- err
-		}
-	}
-}
-
-func reader(blockc chan Block, filec chan *os.File) {
+func reader(blockc chan Block, filec chan *os.File, errc chan error) {
 	for file := range filec {
 		var inBlock bool
 		var section string
@@ -287,7 +293,45 @@ func reader(blockc chan Block, filec chan *os.File) {
 				section = ""
 			}
 		})
+
+		err := file.Close()
+		if err != nil {
+			errc <- err
+		}
 	}
+
+}
+
+// Watch the input file using inotify or knotifyd for CREATE events. Nagios does atomic updates of status.dat
+// by writting out to a temporary file, removing status.dat and moving the temporary file to status.dat. The
+// last event seen in this process is a CREATE, so we'll use that to kick off reader.
+func watcher(input *string, filec chan *os.File, errc chan error) {
+
+	path := path.Dir(*input)
+
+	dir, err := os.Lstat(path)
+
+	if err != nil || !dir.IsDir() {
+		errc <- err
+		return
+	}
+
+	var eventc chan *fsnotify.Event = make(chan *fsnotify.Event)
+
+	go func() {
+		for event := range eventc {
+			// TODO: What does this notation actually mean?
+			if event.Op&fsnotify.Create == fsnotify.Create {
+				file, err := os.Open(*input)
+				if err != nil {
+					errc <- err
+				}
+				filec <- file
+			}
+		}
+	}()
+
+	watch.Watch(path, *input, eventc, errc)
 
 }
 
@@ -340,7 +384,7 @@ func main() {
 
 	wgReader.Add(1)
 	go func() {
-		reader(blockc, filec)
+		reader(blockc, filec, errc)
 		wgReader.Done()
 	}()
 
@@ -350,7 +394,7 @@ func main() {
 	wgUploaders.Add(numUploaders)
 	for i := 0; i < numUploaders; i++ {
 		go func() {
-			uploader(c, seriesc, errc)
+			uploader(noop, c, seriesc, errc)
 			wgUploaders.Done()
 		}()
 	}
@@ -364,6 +408,14 @@ func main() {
 		}()
 	}
 
+	if *oneshot == false {
+		watcher(input, filec, errc)
+
+		done := make(chan bool)
+
+		<-done
+	}
+
 	//The following needs to be in this very specfic order of closes and waits.
 	close(filec)
 	wgReader.Wait()
@@ -375,7 +427,4 @@ func main() {
 	wgUploaders.Wait()
 	close(errc)
 
-	if err = file.Close(); err != nil {
-		log.Fatalf("os.Close: %s", err)
-	}
 }
