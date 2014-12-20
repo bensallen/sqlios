@@ -21,15 +21,16 @@ import (
 
 //Cmd line flags
 var (
-	input    = kingpin.Flag("input", "Input file").Required().Short('i').String()
-	cpus     = kingpin.Flag("cpus", "Max number of CPUs to use").Short('c').Int()
-	noop     = kingpin.Flag("noop", "Don't actually push any data to InfluxDB, just print the JSON output").Short('n').Bool()
-	oneshot  = kingpin.Flag("oneshot", "Run once in the foreground and exit").Short('o').Bool()
-	debug    = kingpin.Flag("debug", "Print debug output").Short('d').Bool()
-	host     = kingpin.Flag("host", "InfluxDB host to connect to").Default("localhost:8086").Short('h').String()
-	username = kingpin.Flag("username", "InfluxDB user name to authenticate as").Default("root").Short('u').String()
-	password = kingpin.Flag("password", "Password to authenticate with").Default("root").Short('p').String()
-	database = kingpin.Flag("database", "InfluxDB database to connect to").Short('D').String()
+	input       = kingpin.Flag("input", "Input file").Required().Short('i').String()
+	cpus        = kingpin.Flag("cpus", "Max number of CPUs to use").Short('c').Int()
+	noop        = kingpin.Flag("noop", "Don't actually push any data to InfluxDB, just print the JSON output").Short('n').Bool()
+	oneshot     = kingpin.Flag("oneshot", "Run once in the foreground and exit").Short('o').Bool()
+	debug       = kingpin.Flag("debug", "Print debug output").Short('d').Bool()
+	host        = kingpin.Flag("host", "InfluxDB host to connect to").Default("localhost:8086").Short('h').String()
+	username    = kingpin.Flag("username", "InfluxDB user name to authenticate as").Default("root").Short('u').String()
+	password    = kingpin.Flag("password", "Password to authenticate with").Default("root").Short('p').String()
+	database    = kingpin.Flag("database", "InfluxDB database to connect to").Short('D').String()
+	loadOnStart = kingpin.Flag("onstart", "Force input file to be loaded on start, do not wait for the file to be updated").Short('O').Bool()
 )
 
 //Custom Errors
@@ -160,7 +161,7 @@ func parseLine(line *string, inBlock *bool, section *string, block []string) []s
 	return block
 }
 
-func parseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error) {
+func parseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error, lastCreated *int, currentCreated *int) {
 
 	for block := range blockc {
 
@@ -363,6 +364,9 @@ func main() {
 	var seriesc = make(chan *client.Series)
 	var errc = make(chan error, 10)
 
+	var lastCreated int
+	var currentCreated int
+
 	// Startup an err channel handler
 	go func() {
 		for err := range errc {
@@ -374,14 +378,12 @@ func main() {
 	var wgUploaders sync.WaitGroup
 	var wgBlockParsers sync.WaitGroup
 
-	// Startup a single reader handler
+	// Startup a single reader handlers
 	wgReader.Add(1)
 	go func() {
 		reader(blockc, filec, errc)
 		wgReader.Done()
 	}()
-
-	filec <- file
 
 	// Startup the uploader handlers
 	wgUploaders.Add(numUploaders)
@@ -396,12 +398,17 @@ func main() {
 	wgBlockParsers.Add(numBlockParsers)
 	for i := 0; i < numBlockParsers; i++ {
 		go func() {
-			parseBlock(blockc, seriesc, errc)
+			parseBlock(blockc, seriesc, errc, &lastCreated, &currentCreated)
 			wgBlockParsers.Done()
 		}()
 	}
 
+	if *loadOnStart || *oneshot {
+		filec <- file
+	}
+
 	if *oneshot == false {
+
 		watcher(input, filec, errc)
 
 		done := make(chan bool)
