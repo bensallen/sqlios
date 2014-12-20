@@ -24,40 +24,34 @@ var (
 	input    = kingpin.Flag("input", "Input file").Required().Short('i').String()
 	cpus     = kingpin.Flag("cpus", "Max number of CPUs to use").Short('c').Int()
 	noop     = kingpin.Flag("noop", "Don't actually push any data to InfluxDB, just print the JSON output").Short('n').Bool()
-	oneshot  = kingpin.Flag("oneshot", "Run once in the forground and exit").Short('o').Bool()
+	oneshot  = kingpin.Flag("oneshot", "Run once in the foreground and exit").Short('o').Bool()
 	debug    = kingpin.Flag("debug", "Print debug output").Short('d').Bool()
 	host     = kingpin.Flag("host", "InfluxDB host to connect to").Default("localhost:8086").Short('h').String()
-	username = kingpin.Flag("username", "InfluxDB username to authenticate as").Default("root").Short('u').String()
+	username = kingpin.Flag("username", "InfluxDB user name to authenticate as").Default("root").Short('u').String()
 	password = kingpin.Flag("password", "Password to authenticate with").Default("root").Short('p').String()
 	database = kingpin.Flag("database", "InfluxDB database to connect to").Short('D').String()
 )
 
 //Custom Errors
-type ErrNonNumeric struct{ Msg string }
+type errNonNumeric struct{ Msg string }
 
-func (e *ErrNonNumeric) Error() string {
+func (e *errNonNumeric) Error() string {
 	return fmt.Sprintf("could not find a numeric value: %s", e.Msg)
 }
 
-type ErrPerfDataNotKeyValue struct {
-	Msg     string
-	LineNum int
+type errPerfDataNotKeyValue struct{ Msg string }
+
+func (e *errPerfDataNotKeyValue) Error() string {
+	return fmt.Sprintf("perfdata found without a key = value format: %s", e.Msg)
 }
 
-func (e *ErrPerfDataNotKeyValue) Error() string {
-	return fmt.Sprintf("perfdata found without a key = value format at Line %d: %s", e.LineNum, e.Msg)
+type errNotPerfData struct{ Msg string }
+
+func (e *errNotPerfData) Error() string {
+	return fmt.Sprintf("perfdata is in unexpected format, not a single value or 5 \";\" separated string: %s", e.Msg)
 }
 
-type ErrNotPerfData struct {
-	Msg     string
-	LineNum int
-}
-
-func (e *ErrNotPerfData) Error() string {
-	return fmt.Sprintf("perfdata is in unexpected format, not a single value or 5 \";\" separated string at Line %d: %s", e.LineNum, e.Msg)
-}
-
-//Structs
+//Block is made up of the section name and actual lines
 type Block struct {
 	Section string
 	Lines   []string
@@ -67,9 +61,8 @@ type Block struct {
 func prettyName(name []string) string {
 	if name[1] == "" {
 		return name[0]
-	} else {
-		return strings.Join(name, ".")
 	}
+	return strings.Join(name, ".")
 }
 
 // If value has a % convert to a decimal, otherwise strip any non-numerical suffixes
@@ -86,28 +79,27 @@ func parseDataValue(s string) (value interface{}, err error) {
 		}
 		// Return the decimal form of the percentage.
 		return valFloat / 100, err
-	} else {
-		//Trim off the unit off any number
-		re := regexp.MustCompile(`^-?\d+(\.\d+)?`)
-
-		num := re.FindString(s)
-		if num != "" {
-			f, err := strconv.ParseFloat(num, 64)
-			if err != nil {
-				return s, err
-			}
-			return f, err
-		} else {
-			return s, &ErrNonNumeric{s}
-		}
 	}
+	//Trim off the unit off any number
+	re := regexp.MustCompile(`^-?\d+(\.\d+)?`)
+
+	num := re.FindString(s)
+	if num != "" {
+		f, err := strconv.ParseFloat(num, 64)
+		if err != nil {
+			return s, err
+		}
+		return f, err
+	}
+	return s, &errNonNumeric{s}
+
 }
 
 // Parse host and service performance data. Return it in column name and values slices.
 func parsePerfData(s string) (columns []string, points []interface{}, err error) {
 
 	// Prefix all perfdata column names with:
-	var prefix string = "performance_data."
+	var prefix = "performance_data."
 
 	//Map to append to column name for perfdata values, "value;warn_limit;critical_limit;minimum_value;maximum value"
 	var perfmap = map[int]string{
@@ -144,10 +136,10 @@ func parsePerfData(s string) (columns []string, points []interface{}, err error)
 				}
 			} else {
 				fmt.Println(perfdataKv[0], valueAttrs)
-				err = &ErrPerfDataNotKeyValue{s, 0}
+				err = &errPerfDataNotKeyValue{s}
 			}
 		} else {
-			err = &ErrNotPerfData{s, 0}
+			err = &errNotPerfData{s}
 		}
 	}
 	return columns, points, err
@@ -172,9 +164,9 @@ func parseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error)
 
 	for block := range blockc {
 
-		var name []string = make([]string, 2)
-		var columns []string = make([]string, 0, 60)
-		var points []interface{} = make([]interface{}, 0, 60)
+		var name = make([]string, 2)
+		var columns = make([]string, 0, 60)
+		var points = make([]interface{}, 0, 60)
 
 		for _, line := range block.Lines {
 			//fmt.Println(block.Section)
@@ -191,7 +183,7 @@ func parseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error)
 				continue
 			} else if kv[0] == "\tperformance_data" && kv[1] != "" {
 				perfColumns, perfValues, err := parsePerfData(strings.TrimPrefix(line, "\tperformance_data="))
-				//TODO Print whole line instead of the specific perfdata, highlight specific perfdata
+
 				if err != nil {
 					errc <- err
 				}
@@ -271,7 +263,7 @@ func reader(blockc chan Block, filec chan *os.File, errc chan error) {
 	for file := range filec {
 		var inBlock bool
 		var section string
-		var block []string = make([]string, 0, 55)
+		var block = make([]string, 0, 55)
 
 		// Start reading the file
 		readline.ReadLine(file, func(line string) {
@@ -316,7 +308,7 @@ func watcher(input *string, filec chan *os.File, errc chan error) {
 		return
 	}
 
-	var eventc chan *fsnotify.Event = make(chan *fsnotify.Event)
+	var eventc = make(chan *fsnotify.Event)
 
 	go func() {
 		for event := range eventc {
@@ -366,10 +358,10 @@ func main() {
 		log.Fatalf("client.NewClient: %s", err)
 	}
 
-	var filec chan *os.File = make(chan *os.File)
-	var blockc chan Block = make(chan Block)
-	var seriesc chan *client.Series = make(chan *client.Series)
-	var errc chan error = make(chan error, 10)
+	var filec = make(chan *os.File)
+	var blockc = make(chan Block)
+	var seriesc = make(chan *client.Series)
+	var errc = make(chan error, 10)
 
 	// Startup an err channel handler
 	go func() {
@@ -382,6 +374,7 @@ func main() {
 	var wgUploaders sync.WaitGroup
 	var wgBlockParsers sync.WaitGroup
 
+	// Startup a single reader handler
 	wgReader.Add(1)
 	go func() {
 		reader(blockc, filec, errc)
