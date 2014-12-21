@@ -54,8 +54,10 @@ func (e *errNotPerfData) Error() string {
 
 //Block is made up of the section name and actual lines
 type Block struct {
-	Section string
-	Lines   []string
+	Name        string
+	Lines       []string
+	Created     int
+	LastCreated int
 }
 
 //Joins the name slice with a "." if both elements exist, otherwise return just the first element
@@ -161,24 +163,52 @@ func parseLine(line *string, inBlock *bool, section *string, block []string) []s
 	return block
 }
 
-func parseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error, lastCreated *int, currentCreated *int) {
+func parseInfoBlock(block *Block) (err error) {
+
+	if block.Created != 0 {
+		block.LastCreated = block.Created
+	}
+	for _, line := range block.Lines {
+		kv := strings.Split(line, "=")
+		if kv[0] == "\tcreated" {
+			currentCreated, err := strconv.Atoi(kv[1])
+			block.Created = currentCreated
+			return err
+		}
+	}
+	return
+}
+
+func parseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error) {
 
 	for block := range blockc {
 
 		var name = make([]string, 2)
 		var columns = make([]string, 0, 60)
 		var points = make([]interface{}, 0, 60)
+		var skip = false
 
 		for _, line := range block.Lines {
-			//fmt.Println(block.Section)
+
 			kv := strings.Split(line, "=")
 
-			//Replace the last_check column with a column named time, so InfluxDB will use it as its index
-			if kv[0] == "\tlast_check" || kv[0] == "\tcreated" {
+			// Replace the various time columns from status.dat with a column named time
+			// so InfluxDB will use it as its index.
+			if kv[0] == "\tlast_check" || kv[0] == "\tcreated" || kv[0] == "\tentry_time" {
 				columns = append(columns, "time")
 				time, err := strconv.Atoi(kv[1])
 				if err != nil {
 					errc <- err
+				}
+
+				//fmt.Printf("Last Created: %d, Item's Time: %d\n", block.LastCreated, time)
+
+				// Compare this block's time versus the last status.dat's created time
+				// We care about blocks that are newer than the last created time to
+				// avoid uploading duplicate data points between status.dat updates.
+				if block.LastCreated > time {
+					skip = true
+					break
 				}
 				points = append(points, time)
 				continue
@@ -188,41 +218,45 @@ func parseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error,
 				if err != nil {
 					errc <- err
 				}
-				//fmt.Println(perfColumns, perfValues)
+
 				columns = append(columns, perfColumns...)
 				points = append(points, perfValues...)
 				continue
 			}
 
 			switch {
-			case block.Section == "hoststatus":
-				//fmt.Println(strings.TrimLeft(kv[0],"\t"))
+			case block.Name == "hoststatus":
+
 				if kv[0] == "\thost_name" {
 					name[0] = kv[1]
 				}
-			case block.Section == "servicestatus":
+			case block.Name == "servicestatus":
 				if kv[0] == "\thost_name" {
 					name[0] = kv[1]
 				} else if kv[0] == "\tcheck_command" {
 					name[1] = kv[1]
 				}
-				//fmt.Println(strings.TrimLeft(kv[0],"\t"))
 
-			case block.Section == "info":
+			case block.Name == "info":
 				name[0] = "info"
-				//TODO: Figure out which field to use for time
-			case block.Section == "programstatus":
-				name[0] = "programstatus"
-				//TODO: Figure out which field to use for time
 
-			case block.Section == "contactstatus":
-				if kv[0] == "\tcontact_name" {
-					name[0] = kv[1]
-				}
-			case block.Section == "hostcomment" || block.Section == "servicecomment" || block.Section == "hostdowntime":
+			//TODO: Figure out which field to use for time, for now skip programstatus
+			case block.Name == "programstatus":
+				skip = true
+				break
+				//name[0] = "programstatus"
+
+			//TODO: Figure out which field to use for time, for now skip contactstatus
+			case block.Name == "contactstatus":
+				skip = true
+				break
+				//if kv[0] == "\tcontact_name" {
+				//	name[0] = kv[1]
+				//}
+			case block.Name == "hostcomment" || block.Name == "servicecomment" || block.Name == "hostdowntime":
 				if kv[0] == "\thost_name" {
 					name[0] = kv[1]
-					name[1] = block.Section
+					name[1] = block.Name
 				}
 			}
 
@@ -232,6 +266,11 @@ func parseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error,
 				points = append(points, value)
 			}
 		}
+
+		if skip {
+			continue
+		}
+
 		series := &client.Series{
 			Name:    prettyName(name),
 			Columns: columns,
@@ -261,10 +300,15 @@ func uploader(noop *bool, c *client.Client, seriesc chan *client.Series, errc ch
 }
 
 func reader(blockc chan Block, filec chan *os.File, errc chan error) {
+
+	var lastCreated int
+	var currentCreated int
+
 	for file := range filec {
 		var inBlock bool
-		var section string
-		var block = make([]string, 0, 55)
+		var firstBlock = true
+		var name string
+		var lines = make([]string, 0, 55)
 
 		// Start reading the file
 		readline.ReadLine(file, func(line string) {
@@ -275,15 +319,30 @@ func reader(blockc chan Block, filec chan *os.File, errc chan error) {
 				return
 			}
 
-			block = parseLine(&line, &inBlock, &section, block)
+			lines = parseLine(&line, &inBlock, &name, lines)
 
 			//Finished with a block
 			if inBlock == false {
-				blockc <- Block{section, block}
 
-				//Empty the block slice and section since we're headed into a new section.
-				block = make([]string, 0, 55)
-				section = ""
+				// We're assuming the first block is the info block, we need to
+				// update currentCreated and lastCreated before we move on.
+				if firstBlock {
+
+					infoBlock := &Block{name, lines, currentCreated, lastCreated}
+					err := parseInfoBlock(infoBlock)
+					if err != nil {
+						log.Fatalf("Parsing Info Block failed, exiting: %s", err)
+					}
+					lastCreated = infoBlock.LastCreated
+					currentCreated = infoBlock.Created
+
+					firstBlock = false
+				}
+				blockc <- Block{name, lines, currentCreated, lastCreated}
+
+				//Empty the lines slice and name string since we're headed into a new block.
+				lines = make([]string, 0, 55)
+				name = ""
 			}
 		})
 
@@ -364,9 +423,6 @@ func main() {
 	var seriesc = make(chan *client.Series)
 	var errc = make(chan error, 10)
 
-	var lastCreated int
-	var currentCreated int
-
 	// Startup an err channel handler
 	go func() {
 		for err := range errc {
@@ -398,7 +454,7 @@ func main() {
 	wgBlockParsers.Add(numBlockParsers)
 	for i := 0; i < numBlockParsers; i++ {
 		go func() {
-			parseBlock(blockc, seriesc, errc, &lastCreated, &currentCreated)
+			parseBlock(blockc, seriesc, errc)
 			wgBlockParsers.Done()
 		}()
 	}
