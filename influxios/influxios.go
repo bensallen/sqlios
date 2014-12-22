@@ -330,7 +330,7 @@ func Watcher(input *string, filec chan *os.File, errc chan error) {
 		return
 	}
 
-	var eventc = make(chan *fsnotify.Event)
+	var eventc = make(chan *fsnotify.Event, 1024)
 
 	go func() {
 		for event := range eventc {

@@ -56,7 +56,7 @@ func main() {
 		log.Fatalf("client.NewClient: %s", err)
 	}
 
-	var filec = make(chan *os.File)
+	var filec = make(chan *os.File, 10)
 	var blockc = make(chan influxios.Block)
 	var seriesc = make(chan *client.Series)
 	var errc = make(chan error, 10)
