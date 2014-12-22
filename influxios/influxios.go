@@ -326,14 +326,13 @@ func Watcher(input *string, filec chan *os.File, done chan bool, errc chan error
 
 	path := path.Dir(*input)
 
-	dir, err := os.Lstat(path)
+	dir, err := os.Stat(path)
 
 	if err != nil || !dir.IsDir() {
-		errc <- err
-		return
+		log.Fatalf("Parent directory of input: %s, could not stat'ed or is not a directory, watcher bailing!", path)
 	}
 
-	var eventc = make(chan *fsnotify.Event, 1024)
+	var eventc = make(chan *fsnotify.Event, 128)
 
 	go func() {
 		for event := range eventc {
