@@ -273,6 +273,9 @@ func Reader(blockc chan Block, filec chan *os.File, errc chan error) {
 		var name string
 		var lines = make([]string, 0, 55)
 
+		//TODO Add to verbose log level
+		log.Print("Starting to read new file")
+
 		// Start reading the file
 		readline.ReadLine(file, func(line string) {
 			if string(line[0]) == "#" {
@@ -298,6 +301,9 @@ func Reader(blockc chan Block, filec chan *os.File, errc chan error) {
 					}
 					lastCreated = infoBlock.LastCreated
 					currentCreated = infoBlock.Created
+
+					//TODO add to verbose level
+					log.Printf("Info block parsed: lastCreated time %d, currentCreated time %d", lastCreated, currentCreated)
 
 					firstBlock = false
 				}
