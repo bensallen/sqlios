@@ -244,14 +244,16 @@ func ParseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error)
 
 // Uploader takes Series from ParseBlock and either outputs Marshal'ed JSON when no-op'ed
 // or pushes the series to InfluxDB
-func Uploader(noop *bool, c *client.Client, seriesc chan *client.Series, errc chan error) {
+func Uploader(noop *bool, jsonOut *bool, c *client.Client, seriesc chan *client.Series, errc chan error) {
 
 	for series := range seriesc {
-		if *noop == true {
+		if *jsonOut {
 			b, _ := json.MarshalIndent(series, "", "  ")
 			b = append(b, "\n"...)
 			os.Stdout.Write(b)
-		} else {
+		}
+
+		if *noop == false {
 			if err := c.WriteSeriesWithTimePrecision([]*client.Series{series}, client.Second); err != nil {
 				errc <- err
 			}
@@ -319,7 +321,8 @@ func Reader(blockc chan Block, filec chan *os.File, errc chan error) {
 // Nagios does atomic updates of status.dat by writting out to a temporary file,
 // removing status.dat and moving the temporary file to status.dat. The last
 // event seen in this process is a CREATE, so we use that to kick off reading.
-func Watcher(input *string, filec chan *os.File, errc chan error) {
+// Watcher waits on the done chan forever.
+func Watcher(input *string, filec chan *os.File, done chan bool, errc chan error) {
 
 	path := path.Dir(*input)
 
@@ -347,4 +350,6 @@ func Watcher(input *string, filec chan *os.File, errc chan error) {
 
 	watch.Watch(path, *input, eventc, errc)
 
+	//Wait until someone tells us we're done
+	<-done
 }

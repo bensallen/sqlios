@@ -17,12 +17,14 @@ var (
 	cpus        = kingpin.Flag("cpus", "Max number of CPUs to use").Short('c').Int()
 	noop        = kingpin.Flag("noop", "Don't actually push any data to InfluxDB, just print the JSON output").Short('n').Bool()
 	oneshot     = kingpin.Flag("oneshot", "Run once in the foreground and exit").Short('o').Bool()
-	debug       = kingpin.Flag("debug", "Print debug output").Short('d').Bool()
+	verbose     = kingpin.Flag("verbose", "Output more verbose information").Short('v').Bool()
+	debug       = kingpin.Flag("debug", "Print debug output").Short('D').Bool()
 	host        = kingpin.Flag("host", "InfluxDB host to connect to").Default("localhost:8086").Short('h').String()
 	username    = kingpin.Flag("username", "InfluxDB user name to authenticate as").Default("root").Short('u').String()
 	password    = kingpin.Flag("password", "Password to authenticate with").Default("root").Short('p').String()
 	database    = kingpin.Flag("database", "InfluxDB database to connect to").Short('D').String()
 	loadOnStart = kingpin.Flag("onstart", "Force input file to be loaded on start, do not wait for the file to be updated").Short('O').Bool()
+	jsonOut     = kingpin.Flag("json", "Print out JSON output of data").Short('J').Bool()
 )
 
 func main() {
@@ -83,7 +85,7 @@ func main() {
 	wgUploaders.Add(numUploaders)
 	for i := 0; i < numUploaders; i++ {
 		go func() {
-			influxios.Uploader(noop, c, seriesc, errc)
+			influxios.Uploader(noop, jsonOut, c, seriesc, errc)
 			wgUploaders.Done()
 		}()
 	}
@@ -103,12 +105,10 @@ func main() {
 
 	if *oneshot == false {
 
-		influxios.Watcher(input, filec, errc)
-
 		done := make(chan bool)
 
-		//Wait forever
-		<-done
+		influxios.Watcher(input, filec, done, errc)
+
 	}
 
 	//The following needs to be in this very specfic order of closes and waits to
