@@ -143,7 +143,7 @@ func ParseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error)
 		var name = make([]string, 2)
 		var columns = make([]string, 0, 60)
 		var points = make([]interface{}, 0, 60)
-		var skip = false
+		var skip bool
 
 		for _, line := range block.Lines {
 
@@ -152,7 +152,7 @@ func ParseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error)
 			// Replace the various time columns from status.dat with a column named time
 			// so InfluxDB will use it as its index.
 			if kv[0] == "\tlast_check" || kv[0] == "\tcreated" || kv[0] == "\tentry_time" {
-				columns = append(columns, "time")
+
 				time, err := strconv.Atoi(kv[1])
 				if err != nil {
 					errc <- err
@@ -160,13 +160,14 @@ func ParseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error)
 
 				//fmt.Printf("Last Created: %d, Item's Time: %d\n", block.LastCreated, time)
 
-				// Compare this block's time versus the last status.dat's created time
+				// Compare this block's time to the last status.dat's created time.
 				// We care about blocks that are newer than the last created time to
 				// avoid uploading duplicate data points between status.dat updates.
 				if block.LastCreated > time {
 					skip = true
 					break
 				}
+				columns = append(columns, "time")
 				points = append(points, time)
 				continue
 			} else if kv[0] == "\tperformance_data" && kv[1] != "" {
