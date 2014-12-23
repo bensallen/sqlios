@@ -61,6 +61,11 @@ func main() {
 	var filec = make(chan *os.File, 10)
 	var blockc = make(chan influxios.Block)
 	var seriesc = make(chan *client.Series)
+
+	//Reader pushes a true to this channel at the end of each file. Uploader
+	//consumes it to know when to print off the count of uploaded series
+	var endOfFile = make(chan bool)
+
 	var errc = make(chan error, 10)
 
 	// Startup an err channel handler
@@ -77,7 +82,7 @@ func main() {
 	// Startup a single Reader
 	wgReader.Add(1)
 	go func() {
-		influxios.Reader(blockc, filec, errc)
+		influxios.Reader(blockc, filec, endOfFile, errc)
 		wgReader.Done()
 	}()
 
@@ -85,7 +90,7 @@ func main() {
 	wgUploaders.Add(numUploaders)
 	for i := 0; i < numUploaders; i++ {
 		go func() {
-			influxios.Uploader(noop, jsonOut, c, seriesc, errc)
+			influxios.Uploader(noop, jsonOut, c, seriesc, endOfFile, errc)
 			wgUploaders.Done()
 		}()
 	}

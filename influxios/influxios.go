@@ -244,9 +244,20 @@ func ParseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error)
 
 // Uploader takes Series from ParseBlock and either outputs Marshal'ed JSON when no-op'ed
 // or pushes the series to InfluxDB
-func Uploader(noop *bool, jsonOut *bool, c *client.Client, seriesc chan *client.Series, errc chan error) {
+func Uploader(noop *bool, jsonOut *bool, c *client.Client, seriesc chan *client.Series, endOfFile chan bool, errc chan error) {
+	var count int64
+
+	//TODO Add this func to only run when verbose
+	go func() {
+		for range endOfFile {
+
+			log.Printf("Uploaded %d series (est.)", count)
+			count = 0
+		}
+	}()
 
 	for series := range seriesc {
+		count++
 		if *jsonOut {
 			b, _ := json.MarshalIndent(series, "", "  ")
 			b = append(b, "\n"...)
@@ -262,7 +273,7 @@ func Uploader(noop *bool, jsonOut *bool, c *client.Client, seriesc chan *client.
 }
 
 // Reader reads files pushed to the filec channel, and outputs Block structs
-func Reader(blockc chan Block, filec chan *os.File, errc chan error) {
+func Reader(blockc chan Block, filec chan *os.File, endOfFile chan bool, errc chan error) {
 
 	var lastCreated int
 	var currentCreated int
@@ -272,6 +283,7 @@ func Reader(blockc chan Block, filec chan *os.File, errc chan error) {
 		var firstBlock = true
 		var name string
 		var lines = make([]string, 0, 55)
+		var count int64
 
 		//TODO Add to verbose log level
 		log.Print("Starting to read new file")
@@ -307,6 +319,7 @@ func Reader(blockc chan Block, filec chan *os.File, errc chan error) {
 
 					firstBlock = false
 				}
+				count++
 				blockc <- Block{name, lines, currentCreated, lastCreated}
 
 				//Empty the lines slice and name string since we're headed into a new block.
@@ -314,6 +327,9 @@ func Reader(blockc chan Block, filec chan *os.File, errc chan error) {
 				name = ""
 			}
 		})
+
+		log.Printf("Read in %d items", count)
+		endOfFile <- true
 
 		err := file.Close()
 		if err != nil {
