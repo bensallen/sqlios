@@ -1,0 +1,68 @@
+{
+	"version": 0,
+	"dependencies": [
+		{
+			"importpath": "github.com/alecthomas/kingpin",
+			"repository": "https://github.com/alecthomas/kingpin",
+			"revision": "8cccfa8eb2e3183254457fb1749b2667fbc364c7",
+			"branch": "master"
+		},
+		{
+			"importpath": "github.com/alecthomas/template",
+			"repository": "https://github.com/alecthomas/template",
+			"revision": "14fd436dd20c3cc65242a9f396b61bfc8a3926fc",
+			"branch": "master"
+		},
+		{
+			"importpath": "github.com/alecthomas/units",
+			"repository": "https://github.com/alecthomas/units",
+			"revision": "2efee857e7cfd4f3d0138cc3cbb1b4966962b93a",
+			"branch": "master"
+		},
+		{
+			"importpath": "github.com/fsnotify/fsnotify",
+			"repository": "https://github.com/fsnotify/fsnotify",
+			"revision": "9297c46340639aebbb6820f260c699465528fb60",
+			"branch": "master"
+		},
+		{
+			"importpath": "github.com/influxdata/influxdb/client/v2",
+			"repository": "https://github.com/influxdata/influxdb",
+			"revision": "f18d7e759625b829a8ad82e1b7631e5e9412b7d0",
+			"branch": "master",
+			"path": "/client/v2"
+		},
+		{
+			"importpath": "github.com/influxdata/influxdb/models",
+			"repository": "https://github.com/influxdata/influxdb",
+			"revision": "f18d7e759625b829a8ad82e1b7631e5e9412b7d0",
+			"branch": "master",
+			"path": "/models"
+		},
+		{
+			"importpath": "github.com/influxdata/influxdb/pkg/escape",
+			"repository": "https://github.com/influxdata/influxdb",
+			"revision": "f18d7e759625b829a8ad82e1b7631e5e9412b7d0",
+			"branch": "master",
+			"path": "/pkg/escape"
+		},
+		{
+			"importpath": "github.com/jprichardson/readline-go",
+			"repository": "https://github.com/jprichardson/readline-go",
+			"revision": "69d39989b17ebcfba22d05171eb786919c04b896",
+			"branch": "master"
+		},
+		{
+			"importpath": "github.com/pkg/profile",
+			"repository": "https://github.com/pkg/profile",
+			"revision": "c795610ec6e479e5795f7852db65ea15073674a6",
+			"branch": "master"
+		},
+		{
+			"importpath": "gitlab.alcf.anl.gov/bsallen/watcher",
+			"repository": "https://gitlab.alcf.anl.gov/bsallen/watcher.git",
+			"revision": "fc13db1aeb2c42bae7835b681cb25fbb5e1e706c",
+			"branch": "master"
+		}
+	]
+}
