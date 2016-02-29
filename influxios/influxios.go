@@ -9,11 +9,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
+	"unicode"
 
-	"github.com/influxdb/influxdb/client"
+	"github.com/fsnotify/fsnotify"
+	"github.com/influxdata/influxdb/client/v2"
 	"github.com/jprichardson/readline-go"
 	"gitlab.alcf.anl.gov/bsallen/watcher/watch"
-	"gopkg.in/fsnotify.v1"
 )
 
 //Joins the name slice with a "." if both elements exist, otherwise return just the first element
@@ -22,6 +24,37 @@ func prettyName(name []string) string {
 		return name[0]
 	}
 	return strings.Join(name, ".")
+}
+
+func trimUnitNew(s string) (value interface{}, err error) {
+	for i := len(s) - 1; i >= 0; i-- {
+		//fmt.Println(string(s[i]))
+		if unicode.IsDigit(rune(s[i])) {
+			f, err := strconv.ParseFloat(s[:i+1], 64)
+			if err != nil {
+				return s, nil
+			}
+			return f, err
+		}
+	}
+	return s, err
+}
+
+func trimUnit(s string) (value interface{}, err error) {
+	//Trim off the unit off any number
+	re := regexp.MustCompile(`^-?\d+(\.\d+)?`)
+
+	num := re.FindString(s)
+	if num != "" {
+		f, err := strconv.ParseFloat(num, 64)
+		if err != nil {
+			// Hide the error from ParseFloat as the value is likely just non-numeric,
+			// return the input string itself.
+			return s, nil
+		}
+		return f, err
+	}
+	return s, nil
 }
 
 // If value has a % convert to a decimal, otherwise strip any non-numerical suffixes
@@ -34,33 +67,31 @@ func parseDataValue(s string) (value interface{}, err error) {
 		value := s[:len(s)-1]
 		valFloat, err := strconv.ParseFloat(value, 64)
 		if err != nil {
-			return s, err
+			// Hide the error from ParseFloat as the value is likely just non-numeric,
+			// return the input string itself.
+			return s, nil
 		}
 		// Return the decimal form of the percentage.
 		return valFloat / 100, err
 	}
-	//Trim off the unit off any number
-	re := regexp.MustCompile(`^-?\d+(\.\d+)?`)
 
-	num := re.FindString(s)
-	if num != "" {
-		f, err := strconv.ParseFloat(num, 64)
-		if err != nil {
-			return s, err
-		}
-		return f, err
+	vNew, _ := trimUnitNew(s)
+	v, err := trimUnit(s)
+
+	if vNew != v {
+		log.Printf("Warning, mismatch in trimUnit: %s and trimUnitNew: %s", v, vNew)
 	}
-	return s, &errNonNumeric{s}
 
+	return v, err
 }
 
-// Parse host and service performance data. Return it in column name and values slices.
-func parsePerfData(s string) (columns []string, points []interface{}, err error) {
+// Parse host and service performance data. Add the key value data to the passed fields map pointer.
+func parsePerfData(s string, fields *map[string]interface{}) (err error) {
 
-	// Prefix all perfdata column names with:
+	// Prefix all perfdata field names with:
 	var prefix = "performance_data."
 
-	//Map to append to column name for perfdata values, "value;warn_limit;critical_limit;minimum_value;maximum value"
+	//Map to append to field name for perfdata values, "value;warn_limit;critical_limit;minimum_value;maximum value"
 	var perfmap = map[int]string{
 		0: "",
 		1: ".warn",
@@ -77,8 +108,7 @@ func parsePerfData(s string) (columns []string, points []interface{}, err error)
 			valueAttrs := strings.Split(perfdataKv[1], ";")
 
 			if len(valueAttrs) == 1 {
-				columns = append(columns, strings.ToLower(prefix+string(perfdataKv[0])))
-				points = append(points, perfdataKv[1])
+				(*fields)[strings.ToLower(prefix+string(perfdataKv[0]))] = perfdataKv[1]
 			} else if len(valueAttrs) == 5 || len(valueAttrs) == 4 {
 				//fmt.Println(perfdataKv[0], valueAttrs)
 				for z, attr := range valueAttrs {
@@ -90,8 +120,7 @@ func parsePerfData(s string) (columns []string, points []interface{}, err error)
 						log.Printf("Warning, parseDataValue: %s", err)
 						continue
 					}
-					columns = append(columns, strings.ToLower(prefix+string(perfdataKv[0])+perfmap[z]))
-					points = append(points, value)
+					(*fields)[strings.ToLower(prefix+string(perfdataKv[0])+perfmap[z])] = value
 				}
 			} else {
 				fmt.Println(perfdataKv[0], valueAttrs)
@@ -101,7 +130,7 @@ func parsePerfData(s string) (columns []string, points []interface{}, err error)
 			err = &errNotPerfData{s}
 		}
 	}
-	return columns, points, err
+	return err
 }
 
 func parseLine(line *string, inBlock *bool, section *string, block []string) []string {
@@ -109,7 +138,7 @@ func parseLine(line *string, inBlock *bool, section *string, block []string) []s
 	if strings.HasSuffix(*line, " {") {
 		*inBlock = true
 		*section = strings.TrimSuffix(*line, " {")
-		//fmt.Printf("Start of block %s \n", *inBlock)
+		//fmt.Printf("Start of block %t \n", *inBlock)
 		//End of a block
 	} else if *line == "\t}" {
 		*inBlock = false
@@ -127,7 +156,7 @@ func parseInfoBlock(block *Block) (err error) {
 	for _, line := range block.Lines {
 		kv := strings.Split(line, "=")
 		if kv[0] == "\tcreated" {
-			currentCreated, err := strconv.Atoi(kv[1])
+			currentCreated, err := strconv.ParseInt(kv[1], 10, 64)
 			block.Created = currentCreated
 			return err
 		}
@@ -135,50 +164,45 @@ func parseInfoBlock(block *Block) (err error) {
 	return
 }
 
-// ParseBlock parses Blocks into InfluxDB series
-func ParseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error) {
+// ParseBlock parses Blocks into InfluxDB *client.Point
+func ParseBlock(blockc chan Block, pointc chan *client.Point, errc chan error) {
 
 	for block := range blockc {
 
 		var name = make([]string, 2)
-		var columns = make([]string, 0, 60)
-		var points = make([]interface{}, 0, 60)
+		var fields = make(map[string]interface{})
+		var blockTime int64
 		var skip bool
 
 		for _, line := range block.Lines {
 
 			kv := strings.Split(line, "=")
 
-			// Replace the various time columns from status.dat with a column named time
-			// so InfluxDB will use it as its index.
+			// Parse the various time columns from status.dat into a int64
 			if kv[0] == "\tlast_check" || kv[0] == "\tcreated" || kv[0] == "\tentry_time" {
 
-				time, err := strconv.Atoi(kv[1])
+				var err error
+				blockTime, err = strconv.ParseInt(kv[1], 10, 64)
 				if err != nil {
 					errc <- err
 				}
 
-				//fmt.Printf("Last Created: %d, Item's Time: %d\n", block.LastCreated, time)
+				//fmt.Printf("Last Created: %d, Item's Time: %d, UnixTime: %s\n", block.LastCreated, blockTime, time.Unix(blockTime, 0).String())
 
 				// Compare this block's time to the last status.dat's created time.
 				// We care about blocks that are newer than the last created time to
 				// avoid uploading duplicate data points between status.dat updates.
-				if block.LastCreated > time {
+				if block.LastCreated > blockTime {
 					skip = true
 					break
 				}
-				columns = append(columns, "time")
-				points = append(points, time)
 				continue
 			} else if kv[0] == "\tperformance_data" && kv[1] != "" {
-				perfColumns, perfValues, err := parsePerfData(strings.TrimPrefix(line, "\tperformance_data="))
+				err := parsePerfData(strings.TrimPrefix(line, "\tperformance_data="), &fields)
 
 				if err != nil {
 					errc <- err
 				}
-
-				columns = append(columns, perfColumns...)
-				points = append(points, perfValues...)
 				continue
 			}
 
@@ -219,64 +243,67 @@ func ParseBlock(blockc chan Block, seriesc chan *client.Series, errc chan error)
 			}
 
 			if kv[1] != "" {
-				value, _ := parseDataValue(kv[1])
-				columns = append(columns, strings.TrimLeft(kv[0], "\t"))
-				points = append(points, value)
+				value, err := parseDataValue(kv[1])
+				if err != nil {
+					errc <- err
+				}
+				fields[strings.TrimLeft(kv[0], "\t")] = value
 			}
 		}
 
 		if skip {
 			continue
 		}
+		unixTime := time.Unix(blockTime, 0)
 
-		series := &client.Series{
-			Name:    prettyName(name),
-			Columns: columns,
-			Points: [][]interface{}{
-				points,
-			},
+		//fmt.Printf("time: %#v, fields: %#v\n", unixTime, fields)
+		point, err := client.NewPoint(prettyName(name), map[string]string{}, fields, unixTime)
+		if err != nil {
+			errc <- err
 		}
+		//fmt.Printf("unixTime: %s, blockTime: %d, name: %s, tags: %s\n", unixTime.String(), blockTime, point.Name(), point.Tags())
 
-		seriesc <- series
+		pointc <- point
 
 	}
 }
 
 // Uploader takes Series from ParseBlock and either outputs Marshal'ed JSON when no-op'ed
 // or pushes the series to InfluxDB
-func Uploader(noop *bool, jsonOut *bool, c *client.Client, seriesc chan *client.Series, endOfFile chan bool, errc chan error) {
+func Uploader(noop *bool, jsonOut *bool, c client.Client, pointc chan *client.Point, endOfFile chan bool, errc chan error) {
 	var count int64
 
 	//TODO Add this func to only run when verbose
 	go func() {
 		for range endOfFile {
 
-			log.Printf("Uploaded %d series (est.)", count)
+			log.Printf("Uploaded %d points (est.)", count)
 			count = 0
 		}
 	}()
 
-	for series := range seriesc {
+	for point := range pointc {
+		//fmt.Printf("time: %s, name: %s, tags: %s\n", point.Time().String(), point.Name(), point.Tags())
 		count++
 		if *jsonOut {
-			b, _ := json.MarshalIndent(series, "", "  ")
+			b, _ := json.MarshalIndent(point.Fields(), "", "  ")
 			b = append(b, "\n"...)
 			os.Stdout.Write(b)
 		}
 
-		if *noop == false {
-			if err := c.WriteSeriesWithTimePrecision([]*client.Series{series}, client.Second); err != nil {
-				errc <- err
-			}
-		}
+		//if *noop == false {
+		//	if err := c.WriteSeriesWithTimePrecision([]*client.Series{series}, client.Second); err != nil {
+		//		errc <- err
+		//	}
+		//}
 	}
 }
 
 // Reader reads files pushed to the filec channel, and outputs Block structs
 func Reader(blockc chan Block, filec chan *os.File, endOfFile chan bool, errc chan error) {
 
-	var lastCreated int
-	var currentCreated int
+	var lastCreated int64
+	var currentCreated int64
 
 	for file := range filec {
 		var inBlock bool
@@ -290,6 +317,7 @@ func Reader(blockc chan Block, filec chan *os.File, endOfFile chan bool, errc ch
 
 		// Start reading the file
 		readline.ReadLine(file, func(line string) {
+
 			if string(line[0]) == "#" {
 				/*if *debug {
 					log.Printf("Skipped comment: %s", line)
@@ -298,7 +326,7 @@ func Reader(blockc chan Block, filec chan *os.File, endOfFile chan bool, errc ch
 			}
 
 			lines = parseLine(&line, &inBlock, &name, lines)
-
+			//log.Printf("Lines: %s", lines)
 			//Finished with a block
 			if inBlock == false {
 
@@ -351,7 +379,7 @@ func Watcher(input *string, filec chan *os.File, done chan bool, errc chan error
 	dir, err := os.Stat(path)
 
 	if err != nil || !dir.IsDir() {
-		log.Fatalf("Parent directory of input: %s, could not stat'ed or is not a directory, watcher bailing!", path)
+		log.Fatalf("Parent directory of input: %s, could not stat or is not a directory, watcher bailing!", path)
 	}
 
 	var eventc = make(chan *fsnotify.Event, 128)

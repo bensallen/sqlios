@@ -6,6 +6,6 @@ package influxios
 type Block struct {
 	Name        string
 	Lines       []string
-	Created     int
-	LastCreated int
+	Created     int64
+	LastCreated int64
 }
