@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -26,7 +25,7 @@ func prettyName(name []string) string {
 	return strings.Join(name, ".")
 }
 
-func trimUnitNew(s string) (value interface{}, err error) {
+func trimUnit(s string) (interface{}, error) {
 	for i := len(s) - 1; i >= 0; i-- {
 		//fmt.Println(string(s[i]))
 		if unicode.IsDigit(rune(s[i])) {
@@ -37,56 +36,27 @@ func trimUnitNew(s string) (value interface{}, err error) {
 			return f, err
 		}
 	}
-	return s, err
-}
-
-func trimUnit(s string) (value interface{}, err error) {
-	//Trim off the unit off any number
-	re := regexp.MustCompile(`^-?\d+(\.\d+)?`)
-
-	num := re.FindString(s)
-	if num != "" {
-		f, err := strconv.ParseFloat(num, 64)
-		if err != nil {
-			// Hide the error from ParseFloat as the value is likely just non-numeric,
-			// return the input string itself.
-			return s, nil
-		}
-		return f, err
-	}
 	return s, nil
 }
 
 // If value has a % convert to a decimal, otherwise strip any non-numerical suffixes
-func parseDataValue(s string) (value interface{}, err error) {
+func parseDataValue(s string) (interface{}, error) {
 	if s == "" {
-		return s, err
+		return s, nil
 	}
 	if strings.HasSuffix(s, "%") {
 		// Convert string percentage into float
 		value := s[:len(s)-1]
-		valFloat, err := strconv.ParseFloat(value, 64)
-		if err != nil {
-			// Hide the error from ParseFloat as the value is likely just non-numeric,
-			// return the input string itself.
-			return s, nil
-		}
-		// Return the decimal form of the percentage.
-		return valFloat / 100, err
+		valFloat, _ := strconv.ParseFloat(value, 64)
+		return valFloat / 100, nil
 	}
 
-	vNew, _ := trimUnitNew(s)
 	v, err := trimUnit(s)
-
-	if vNew != v {
-		log.Printf("Warning, mismatch in trimUnit: %s and trimUnitNew: %s", v, vNew)
-	}
-
 	return v, err
 }
 
 // Parse host and service performance data. Add the key value data to the passed fields map pointer.
-func parsePerfData(s string, fields *map[string]interface{}) (err error) {
+func parsePerfData(s string, fields *map[string]interface{}) error {
 
 	// Prefix all perfdata field names with:
 	var prefix = "performance_data."
@@ -124,13 +94,13 @@ func parsePerfData(s string, fields *map[string]interface{}) (err error) {
 				}
 			} else {
 				fmt.Println(perfdataKv[0], valueAttrs)
-				err = &errPerfDataNotKeyValue{s}
+				return &errPerfDataNotKeyValue{s}
 			}
 		} else {
-			err = &errNotPerfData{s}
+			return &errNotPerfData{s}
 		}
 	}
-	return err
+	return nil
 }
 
 func parseLine(line *string, inBlock *bool, section *string, block []string) []string {
@@ -206,14 +176,16 @@ func ParseBlock(blockc chan Block, pointc chan *client.Point, errc chan error) {
 				continue
 			}
 
+			const hostNameMatch string = "\thost_name"
+
 			switch {
 			case block.Name == "hoststatus":
 
-				if kv[0] == "\thost_name" {
+				if kv[0] == hostNameMatch {
 					name[0] = kv[1]
 				}
 			case block.Name == "servicestatus":
-				if kv[0] == "\thost_name" {
+				if kv[0] == hostNameMatch {
 					name[0] = kv[1]
 				} else if kv[0] == "\tcheck_command" {
 					name[1] = kv[1]
@@ -236,7 +208,7 @@ func ParseBlock(blockc chan Block, pointc chan *client.Point, errc chan error) {
 			//	name[0] = kv[1]
 			//}
 			case block.Name == "hostcomment" || block.Name == "servicecomment" || block.Name == "hostdowntime":
-				if kv[0] == "\thost_name" {
+				if kv[0] == hostNameMatch {
 					name[0] = kv[1]
 					name[1] = block.Name
 				}
