@@ -258,7 +258,12 @@ func Uploader(noop *bool, jsonOut *bool, c client.Client, pointc chan *client.Po
 		//fmt.Printf("time: %s, name: %s, tags: %s\n", point.Time().String(), point.Name(), point.Tags())
 		count++
 		if *jsonOut {
-			b, _ := json.MarshalIndent(point.Fields(), "", "  ")
+			fields, err := point.Fields()
+			if err != nil {
+				errc <- err
+				continue
+			}
+			b, _ := json.MarshalIndent(fields, "", "  ")
 			b = append(b, "\n"...)
 			os.Stdout.Write(b)
 		}
