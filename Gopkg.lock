@@ -4,13 +4,16 @@
 [[projects]]
   name = "github.com/alecthomas/kingpin"
   packages = ["."]
-  revision = "1087e65c9441605df944fb12c33f0fe7072d18ca"
-  version = "v2.2.5"
+  revision = "947dcec5ba9c011838740e680966fd7087a71d0d"
+  version = "v2.2.6"
 
 [[projects]]
   branch = "master"
   name = "github.com/alecthomas/template"
-  packages = [".","parse"]
+  packages = [
+    ".",
+    "parse"
+  ]
   revision = "a0175ee3bccc567396460bf5acd36800cb10c49c"
 
 [[projects]]
@@ -22,14 +25,18 @@
 [[projects]]
   name = "github.com/fsnotify/fsnotify"
   packages = ["."]
-  revision = "629574ca2a5df945712d3079857300b5e4da0236"
-  version = "v1.4.2"
+  revision = "c2828203cd70a50dcccfb2761f8b1f8ceef9a8e9"
+  version = "v1.4.7"
 
 [[projects]]
   name = "github.com/influxdata/influxdb"
-  packages = ["client/v2","models","pkg/escape"]
-  revision = "5887e92e8950435ac7e496ff8dada784051284b7"
-  version = "v1.3.1"
+  packages = [
+    "client/v2",
+    "models",
+    "pkg/escape"
+  ]
+  revision = "62ab18a0f43ee342b84debaaae5486b8b2d8682c"
+  version = "v1.6.0"
 
 [[projects]]
   branch = "master"
@@ -45,20 +52,13 @@
 
 [[projects]]
   branch = "master"
-  name = "gitlab.alcf.anl.gov/bsallen/watcher"
-  packages = ["watch"]
-  revision = "5f037a0c8f2170f7d0206107d7cb6b0270214e30"
-  source = "git@gitlab.alcf.anl.gov:bsallen/watcher.git"
-
-[[projects]]
-  branch = "master"
   name = "golang.org/x/sys"
   packages = ["unix"]
-  revision = "35ef4487ce0a1ea5d4b616ffe71e34febe723695"
+  revision = "bd9dbc187b6e1dacfdd2722a87e83093c2d7bd6e"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "832ed667bce2fa1b16e19528efb0ee1c285b4b060c9515acf5be567d26ff56c7"
+  inputs-digest = "cee3fc7ef478bf03bb10558dcc080f4c7bb25e83923cd0cb24f1629e14b6fa6b"
   solver-name = "gps-cdcl"
   solver-version = 1
