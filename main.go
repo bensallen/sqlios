@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/alecthomas/kingpin"
+	"github.com/bensallen/sqlios/fswatch"
 	"github.com/bensallen/sqlios/nagios"
 	"github.com/influxdata/influxdb/client/v2"
 	"github.com/pkg/profile"
@@ -122,11 +123,11 @@ func main() {
 		filec <- file
 	}
 
-	if *oneshot == false {
+	if !*oneshot {
 
 		done := make(chan bool)
 
-		nagios.Watcher(input, filec, done, errc)
+		fswatch.Watcher(input, filec, done, errc)
 
 	}
 
