@@ -7,9 +7,9 @@ import (
 	"sync"
 
 	"github.com/alecthomas/kingpin"
+	"github.com/bensallen/sqlios/nagios"
 	"github.com/influxdata/influxdb/client/v2"
 	"github.com/pkg/profile"
-	"gitlab.alcf.anl.gov/bsallen/influxios/influxios"
 )
 
 //Cmd line flags
@@ -73,7 +73,7 @@ func main() {
 	}
 
 	var filec = make(chan *os.File, 10)
-	var blockc = make(chan influxios.Block, 100)
+	var blockc = make(chan nagios.Block, 100)
 	var pointc = make(chan *client.Point, 100)
 
 	//Reader pushes a true to this channel at the end of each file. Uploader
@@ -96,7 +96,7 @@ func main() {
 	// Startup a single Reader
 	wgReader.Add(1)
 	go func() {
-		influxios.Reader(blockc, filec, endOfFile, errc)
+		nagios.Reader(blockc, filec, endOfFile, errc)
 		wgReader.Done()
 	}()
 
@@ -104,7 +104,7 @@ func main() {
 	wgUploaders.Add(numUploaders)
 	for i := 0; i < numUploaders; i++ {
 		go func() {
-			influxios.Uploader(noop, jsonOut, c, pointc, endOfFile, errc)
+			nagios.Uploader(noop, jsonOut, c, pointc, endOfFile, errc)
 			wgUploaders.Done()
 		}()
 	}
@@ -113,7 +113,7 @@ func main() {
 	wgBlockParsers.Add(numBlockParsers)
 	for i := 0; i < numBlockParsers; i++ {
 		go func() {
-			influxios.ParseBlock(blockc, pointc, errc)
+			nagios.ParseBlock(blockc, pointc, errc)
 			wgBlockParsers.Done()
 		}()
 	}
@@ -126,7 +126,7 @@ func main() {
 
 		done := make(chan bool)
 
-		influxios.Watcher(input, filec, done, errc)
+		nagios.Watcher(input, filec, done, errc)
 
 	}
 
