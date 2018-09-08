@@ -61,6 +61,11 @@ func Test_parseDataValue(t *testing.T) {
 		wantErr bool
 	}{
 		{
+			name: "Empty string",
+			args: args{s: ""},
+			want: "",
+		},
+		{
 			name: "100%",
 			args: args{s: "100%"},
 			want: 1.0,
@@ -164,6 +169,57 @@ func Test_parseLine(t *testing.T) {
 				// Assign got to tt.args.block just to make printing below easier since block is returned as a copy.
 				tt.args.block = got
 				t.Errorf("parseLine() = %#v, want %#v", tt.args, tt.want)
+			}
+		})
+	}
+}
+
+func Test_parseInfoBlock(t *testing.T) {
+	type args struct {
+		block *Block
+	}
+	tests := []struct {
+		name    string
+		args    *Block
+		want    *Block
+		wantErr bool
+	}{
+		{
+			name: "Info block",
+			args: &Block{
+				Name:        "info",
+				LastCreated: 0,
+				Created:     1416605951,
+				Lines: []string{
+					"\tcreated=1416605952",
+				},
+			},
+			want: &Block{
+				Name:        "info",
+				LastCreated: 1416605951,
+				Created:     1416605952,
+				Lines: []string{
+					"\tcreated=1416605952",
+				},
+			},
+		},
+		{
+			name: "Invalid created line",
+			args: &Block{
+				Lines: []string{
+					"\tcreated=asdfasdf",
+				},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := parseInfoBlock(tt.args); (err != nil) != tt.wantErr {
+				t.Errorf("parseInfoBlock() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && !reflect.DeepEqual(tt.args, tt.want) {
+				t.Errorf("parseInfoBlock() got = %v, want %v", tt.args, tt.want)
 			}
 		})
 	}
