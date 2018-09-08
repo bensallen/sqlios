@@ -1,6 +1,7 @@
 package nagios
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -94,6 +95,75 @@ func Test_parseDataValue(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("parseDataValue() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_parseLine(t *testing.T) {
+	type args struct {
+		line    string
+		inBlock bool
+		section string
+		block   []string
+	}
+	tests := []struct {
+		name string
+		args args
+		want args
+	}{
+		{
+			name: "Start of info block",
+			args: args{
+				line:    "info {",
+				inBlock: false,
+				section: "",
+				block:   []string{},
+			},
+			want: args{
+				inBlock: true,
+				section: "info",
+				block:   []string{},
+			},
+		},
+		{
+			name: "End of block",
+			args: args{
+				line:    "\t}",
+				inBlock: true,
+				section: "info",
+				block:   []string{},
+			},
+			want: args{
+				inBlock: false,
+				section: "info",
+				block:   []string{},
+			},
+		},
+		{
+			name: "Line in block",
+			args: args{
+				line:    "\tnagios_pid=5246",
+				inBlock: true,
+				section: "info",
+				block:   []string{},
+			},
+			want: args{
+				inBlock: true,
+				section: "info",
+				block:   []string{"\tnagios_pid=5246"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseLine(&tt.args.line, &tt.args.inBlock, &tt.args.section, tt.args.block)
+
+			// parseLine modifies the passed args inBlock, section, and returns a modified copy of block.
+			if tt.args.inBlock != tt.want.inBlock || tt.args.section != tt.want.section || !reflect.DeepEqual(got, tt.want.block) {
+				// Assign got to tt.args.block just to make printing below easier since block is returned as a copy.
+				tt.args.block = got
+				t.Errorf("parseLine() = %#v, want %#v", tt.args, tt.want)
 			}
 		})
 	}
